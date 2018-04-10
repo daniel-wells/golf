@@ -1,21 +1,11 @@
-functions {
-  real theta0(real x, real R, real r) {
-    return asin((R - r) / x);
-  }
-}
-
 data {
   int N;
-  int<lower = 0> tries[N];
-  int<lower = 0> successes[N];
-  real<lower = 0> dist[N];
-}
-
-transformed data {
+  int<lower=0> tries[N];
+  int<lower=0> successes[N];
+  real<lower=0> dist[N];
+  
   real R;
   real r;
-  R = 4.25 / 2;
-  r = 1.68 / 2;
 }
 
 parameters {
@@ -26,13 +16,16 @@ model {
   real p[N];
   
   for (n in 1:N) 
-    p[n] = 2 * Phi(theta0(dist[n], R, r) / sigma) - 1;
+    p[n] = 2 * Phi(asin((R - r) / dist[n]) / sigma) - 1;
   
-  sigma ~ cauchy(0, 2.5);
   successes ~ binomial(tries, p);
 }
 
 generated quantities {
-  real sigma_degrees;
-  sigma_degrees = 180/pi() * sigma;
+  vector[N] sucess_predictions;
+  for (n in 1:N) {
+    real p;
+  	p = 2 * Phi(asin((R - r) / dist[n]) / sigma) - 1;
+    sucess_predictions[n] = binomial_rng(tries[n], p);
+  }
 }

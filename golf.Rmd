@@ -1,225 +1,513 @@
 ---
-title: "A Probability Model for Golf Putting (paper by Gelman and Nolan)"
-author: "Eric Novik and Daniel Lee"
-date: "28 April 2016"
-output: html_document
+title: "Introduction to Stan"
+author: "Daniel Wells"
+date: "06/02/2018"
+output:
+  ioslides_presentation:
+    widescreen: true
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_chunk$set(echo = FALSE)
 library(readr)
 library(ggplot2)
 library(dplyr)
 library(magrittr)
 library(rstan)
+library(rstanarm)
 library(tidyr)
+library(bayesplot)
+library(data.table)
+knitr::opts_chunk$set(cache=TRUE)
 ```
 
-## Data Simulation
-```{r}
-n <- 101
-# distance to the whole in inches
-dist <- seq(20, 250, length.out = n)
+## Example Data - Golfing
 
-# The golf ball has diameter 2r = 1.68 inches 
-r <- 1.68/2
-
-# and the hole has diameter 2R = 4.25 inches
-R <- 4.25/2
-
-# estimated parameter from the paper (we will try to recover it)
-sigma <- 0.05
-
-# computing the angle theta
-theta0 <- function(x) asin((R - r) / x)
-
-# simulating successes
-p_success <- 2 * pnorm(theta0(dist) / sigma) - 1
-tries <- seq(2000, 100, length.out = n)
-successes <- rbinom(n, size = tries, prob = p_success)
-
-data <- list(N = n, 
-             successes = successes, 
-             tries = tries,
-             dist = dist)
-
-# dataframe for plotting
-golf <- data_frame(
-    p = successes / tries,
-    error_sd = sqrt((p  * (1 - p)) / tries),
-    lower = p - 2 * error_sd,
-    upper = p + 2 * error_sd,
-    fit = p_success
-)
-
-limits <- with(golf, aes(ymax = upper, ymin = lower))
-p <- ggplot(golf, aes(x = dist / 12, y = p))
-p <- p + geom_pointrange(limits)
-p <- p + geom_line(aes(y = fit), colour = "red")
-p <- p +  xlab("Distance (feet)") + 
-  ylab("Proportion of Success") +
-  theme_bw()
-p
-
-
-```
-
-## Set up the Dataset
-```{r}
+```{r, echo=FALSE}
 N <- 19
 tries <- c(1443, 694, 455, 353,  272, 256, 240, 217, 200, 237, 202, 192, 174, 
            167, 201, 195, 191, 147, 152)
 successes <- c(1346, 577, 337,  208, 149, 136, 111, 69, 67, 75, 52, 46, 54,
                28, 27, 31, 33, 20,  24)
-dist <- 2:20 * 12 # converting to inches
-data <- list(N = N, 
+dist <- 2:20
+# The golf ball has diameter 2r = 1.68 inches 
+r <- 1.68/2 /12
+
+# and the hole has diameter 2R = 4.25 inches
+R <- 4.25/2 /12
+
+data <- list(N = N,
              tries = tries, 
              successes = successes, 
-             dist = dist)
+             dist = dist,
+             r = r,
+             R = R)
 
-```
-
-## Helper Function for the Threshold Angle
-```{r}
 theta0 <- function(x) {
   asin((R - r) / x)
 }
-```
 
-## Replicating the Graph from the Paper
-```{r}
-sigma <- 0.026
 golf <-
   data_frame(
+    dist = dist,
+    successes = successes,
+    tries = tries,
     p = successes / tries,
-    error_sd = sqrt((p  * (1 - p)) / tries),
-    lower = p - 2 * error_sd,
-    upper = p + 2 * error_sd,
-    fit = 2 * pnorm(theta0(dist) / sigma) - 1
+    error_sd = sqrt((p  * (1 - p)) / tries)
   )
 
-limits <- with(golf, aes(ymax = upper, ymin = lower))
-p <- ggplot(golf, aes(x = dist / 12, y = p))
-p <- p + geom_pointrange(limits, colour = "red")
-#p <- p + geom_line(aes(y = fit), colour = "red")
-p <- p +  xlab("Distance (feet)") + 
+golf
+
+```
+
+## Visualise the data {.flexbox .vcenter}
+
+```{r, echo=FALSE}
+
+limits <- with(golf, aes(ymax = p + 2 * error_sd, ymin = p - 2 * error_sd))
+p <- ggplot(golf, aes(x = dist, y = p)) +
+  geom_pointrange(limits, col="red") +
+  xlab("Distance (feet)") + 
   ylab("Proportion of Success") +
-  theme_bw()
+  theme_classic() +
+  ylim(0,1) + xlim(0,NA)
 p
 ```
 
-## Stan Model
-This model is defined in ```golf.stan``` file
-```{r, eval=FALSE}
-functions {
-  real theta0(real x, real R, real r) {
-    return asin((R - r) / x);
-  }
-}
+## Logistic Regression?
 
+```{r}
+logistic_binom <- glm(p ~ dist,
+                      weights = tries,
+                      data = golf,
+                      family = binomial(link = "logit"))
+logistic_binom
+```
+
+## ... in Stan (the easy version)
+
+```{r}
+library(rstanarm)
+stan_logistic_binom <- stan_glm(p ~ dist,
+                                weights = tries,
+                                data = golf,
+                                family = binomial(link = "logit"))
+```
+
+## ... in Stan {.build}
+
+```{r}
+coefficients(logistic_binom)
+coefficients(stan_logistic_binom)
+```
+
+
+## Priors {.smaller}
+```{r}
+prior_summary(stan_logistic_binom)
+```
+
+```{r, eval=FALSE}
+stan_logistic_binom2 <- stan_glm(p ~ dist,
+                                weights = tries,
+                                data = golf,
+                                family = binomial(link = "logit"),
+                                ### <b>
+                                prior = laplace(location = 0, scale = 10),
+                                prior_intercept = cauchy(location = 0, scale = 2.5))
+### </b>
+```
+
+
+## Predictions
+```{r}
+predicted_proportions <- predict(logistic_binom, type='response')
+str(predicted_proportions)
+```
+
+```{r}
+stan_linepred <- posterior_linpred(stan_logistic_binom, transform = T)
+str(stan_linepred)
+```
+
+## {.flexbox .vcenter}
+
+```{r, echo=FALSE}
+names(dimnames(stan_linepred)) <- list(c("sample","dist"))
+colnames(stan_linepred) <- golf$dist
+rownames(stan_linepred) <- 1:4000
+
+ppc_dt <- melt(data.table(stan_linepred, keep.rownames = T), id.vars = "rn", variable.name = "dist", value.name = "p")
+setnames(ppc_dt, "rn","sample")
+ppc_dt$dist <- as.numeric(as.character(ppc_dt$dist))
+
+ggplot(ppc_dt, aes(dist, p, group=sample)) +
+  geom_point(alpha=0.05) +
+  geom_point(data=cbind(golf, sample="true"), colour="red") +
+  geom_line(data=data.table(p=predicted_proportions, sample="logistic"), colour="blue") +
+  theme_classic() +
+  ylim(0,1) + xlim(0,NA) +
+  xlab("Distance (feet)") + 
+  ylab("Proportion of Success")
+```
+
+## Posterior Predictive
+
+```{r}
+logist_binom_predict <- posterior_predict(stan_logistic_binom, draws = 500)
+str(logist_binom_predict)
+# convert sucesses to proportions
+logist_binom_predict <- t(t(logist_binom_predict) / golf$tries)
+str(logist_binom_predict)
+```
+
+## {.flexbox .vcenter}
+
+```{r, echo=FALSE}
+colnames(logist_binom_predict) <- 2:20
+rownames(logist_binom_predict) <- 1:500
+
+ppc_dt <- melt(data.table(logist_binom_predict, keep.rownames = T), id.vars = "rn", variable.name = "dist", value.name = "p")
+setnames(ppc_dt, "rn","sample")
+ppc_dt$dist <- as.numeric(as.character(ppc_dt$dist))
+
+ggplot(ppc_dt, aes(dist, p, group=sample)) +
+  geom_point(alpha=0.01) +
+  geom_point(data=cbind(golf, sample="true"), colour="red") +
+  geom_line(data=data.table(p=predicted_proportions, sample="logistic"), colour="blue") +
+  theme_classic() +
+  ylim(0,1) + xlim(0,NA) +
+  xlab("Distance (feet)") + 
+  ylab("Proportion of Success")
+```
+
+$$ 
+p(y^{rep}|y) = \int_{\Theta} p(y^{rep}|\theta) p(\theta|y)d\theta
+$$
+
+## A Geometric Model
+
+<div class="columns-2">
+```{r, echo=FALSE, out.width = "400px"}
+knitr::include_graphics("geometry.png")
+```
+
+$$
+P(\text{success from dist } x) \\
+= 2\Phi\Bigg(\frac{1}{\sigma} arcsin\Big(\frac{R-r}{x}\Big)\Bigg)-1
+$$
+```{r, warning=FALSE, fig.width=5}
+P_success <- function(sigma, R, r, x){
+  2 * pnorm(asin((R-r)/x) / sigma) - 1
+  }
+x <- seq(0,30,0.1)
+qplot(x, P_success(1*pi/180, R, r, x),
+      geom="line") + ylim(0,1)
+```
+
+</div>
+
+## Stan Model Part 1
+
+```{r, eval=FALSE}
 data {
   int N;
-  int<lower = 0> tries[N];
-  int<lower = 0> successes[N];
-  real<lower = 0> dist[N];
-}
-
-transformed data {
+  int<lower=0> tries[N];
+  int<lower=0> successes[N];
+  real<lower=0> dist[N];
   real R;
   real r;
-  R = 4.25 / 2;
-  r = 1.68 / 2;
 }
 
 parameters {
   real<lower = 0> sigma;
 }
+```
 
+## Stan Model Part 2
+
+```{r, eval=FALSE}
 model {
   real p[N];
   
   for (n in 1:N) 
-    p[n] = 2 * Phi(theta0(dist[n], R, r) / sigma) - 1;
+    p[n] = 2 * Phi(asin((R - r) / dist[n]) / sigma) - 1;
   
-  sigma ~ cauchy(0, 2.5);
   successes ~ binomial(tries, p);
-}
-
-generated quantities {
-  real sigma_degrees;
-  sigma_degrees = 180/pi() * sigma;
 }
 ```
 
-## Fitting the Model in Stan
-Data is passed directly from the R environment to Stan.
-```{r, cache=TRUE}
+Vectorised:
+
+```{r, eval=FALSE}
+model {
+  real p[N];
+  p = 2 * Phi(asin((R - r) / dist) / sigma) - 1;
+  
+  // A comment
+  successes ~ binomial(tries, p);
+}
+```
+
+## Stan Model Part 3
+
+```{r, eval=FALSE}
+generated quantities {
+  vector[N] sucess_predictions;
+  for (n in 1:N) {
+    real p;
+  	p = 2 * Phi(asin((R - r) / dist[n]) / sigma) - 1;
+    sucess_predictions[n] = binomial_rng(tries[n], p);
+  }
+}
+```
+
+## Stan Data Types
+
+```{r, eval=FALSE}
+int N;
+real x;
+vector[N] x;
+simplex[K] x;
+unit_vector[K] x;
+ordered[K] x;
+positive_ordered[K] x;
+
+cov_matrix[K] x;
+corr_matrix[K] x;
+
+cholesky_factor_cov[K] x;
+cholesky_factor_corr[K] x;
+```
+
+
+## Prepare Data & Compile Model
+
+```{r}
+str(data)
+
+library(rstan)
+#options(mc.cores = parallel::detectCores())
 golf_stan <- stan_model(file = "golf.stan")
-golf_fit <- sampling(golf_stan, iter = 300, chains = 4, data = data)
+```
 
-# Convergence diagnostics
-mcmc_neff(neff_ratio(golf_fit))
-mcmc_rhat(rhat(golf_fit))
+## Sample!
 
-golf_samples <- as.array(golf_fit)
-mcmc_acf(golf_samples)
-mcmc_trace(golf_samples, regex_pars = c("sig"))
+```{r}
+golf_fit <- sampling(golf_stan, data=data) 
+```
 
-nusts <- nuts_params(golf_fit)
-lp <- log_posterior(golf_fit)
-mcmc_nuts_divergence(nusts, lp = lp)
-mcmc_nuts_treedepth(nusts, lp = lp)
+## Sampling Options
 
-mcmc_intervals(golf_samples, pars = "sigma")
+```{r, eval=FALSE}
+golf_fit <- stan(file = "golf.stan",
+                 model_name = "golf_putting",
+                 data = data,
+                 chains = 3,
+                 iter = 1000,
+                 warmup = 200,
+                 thin = 2,
+                 seed = 42,
+                 cores = 2,
+                 algorithm = "HMC")
 
-p_success <- 2 * pnorm(theta0(dist) / mean(golf_samples[, 'sigma'])) - 1
+golf_fit <- vb(golf_stan, data=data)
+```
 
-golf <- data_frame(
-    p = successes / tries,
-    error_sd = sqrt((p  * (1 - p)) / tries),
-    lower = p - 2 * error_sd,
-    upper = p + 2 * error_sd,
-    fit = p_success
-)
+```{bash, eval=FALSE}
+make golf
+./golf sample data file=golf_data.R
+./golf variational data file=golf_data.R
+```
 
-limits <- with(golf, aes(ymax = upper, ymin = lower))
-p <- ggplot(golf, aes(x = dist / 12, y = p))
-p <- p + geom_pointrange(limits, colour = "red")
-#p <- p + geom_line(aes(y = fit), colour = "red")
-p <- p +  xlab("Distance (feet)") + 
+----
+
+```{r}
+print(golf_fit)
+```
+
+## Diagnostics
+
+```{r}
+stan_trace(golf_fit, pars = "sigma")
+```
+
+----
+
+```{r}
+stan_ac(golf_fit, pars = 'sigma')
+```
+
+## Extract Samples
+
+```{r}
+str(as.matrix(golf_fit))
+str(as.array(golf_fit))
+```
+
+----
+
+```{r}
+str(rstan::extract(golf_fit))
+```
+
+## Check Fit {.flexbox .vcenter}
+
+```{r, echo=FALSE}
+sigma <- as.matrix(golf_fit)[,"sigma"]
+
+p_sucess <- 2 * pnorm(asin((R - r) / dist) / mean(sigma)) - 1
+
+p <- ggplot(golf, aes(x = dist, y = p)) +
+  geom_pointrange(limits, col="red") +
+  geom_line(data=data.table(p=p_sucess, dist=2:20)) +
+  geom_line(data=data.table(p=predicted_proportions), colour="blue") +
+  xlab("Distance (feet)") + 
   ylab("Proportion of Success") +
-  theme_bw()
+  theme_classic() +
+  ylim(0,1) + xlim(0,NA)
 p
 
 ```
 
-## Extracting Parameter Values and Plotting
-```{r}
-sigma <- rstan::extract(golf_fit, pars = 'sigma') $sigma
-sigma_deg <- rstan::extract(golf_fit, pars = 'sigma_degrees')$sigma_degrees
+## Posterior Predictive {.flexbox .vcenter}
 
-plot_dens <- function(param) {
-  ggplot(as.data.frame(param), aes(x = param)) + 
-    geom_line(stat = "density") + theme_bw()
+```{r, echo=FALSE}
+golf_predictive <- rstan::extract(golf_fit, pars="sucess_predictions")[[1]]
+golf_predictive <- t(t(golf_predictive) / golf$tries)
+
+colnames(golf_predictive) <- 2:20
+rownames(golf_predictive) <- 1:nrow(golf_predictive)
+
+ppc_dt <- melt(data.table(golf_predictive[1:1000,], keep.rownames = T), id.vars = "rn", variable.name = "dist", value.name = "p")
+setnames(ppc_dt, "rn","sample")
+ppc_dt$dist <- as.numeric(as.character(ppc_dt$dist))
+
+ggplot(ppc_dt, aes(dist, p, group=sample)) +
+  geom_point(alpha=0.05) +
+  geom_point(data=cbind(golf, sample="true"), colour="red") +
+  geom_line(data=data.table(p=p_sucess, sample="stan"), col="red") +
+  geom_line(data=data.table(p=predicted_proportions, sample="logistic"), colour="blue") +
+  theme_classic() +
+  ylim(0,1) + xlim(0,NA) +
+  xlab("Distance (feet)") + 
+  ylab("Proportion of Success")
+```
+
+## One liner PPCs with library(bayesplot) {.smaller}
+
+<div class="columns-2">
+```{r, warning=FALSE, fig.width=5}
+ppc_violin_grouped(y=golf$p,
+  yrep=logist_binom_predict[1:500,],
+  group = golf$dist, y_size = 2, y_draw = "both") +
+  theme(legend.position = "bottom")
+ppc_violin_grouped(y=golf$p,
+  yrep=golf_predictive[1:500,],
+  group = golf$dist, y_size = 2, y_draw = "both") +
+  theme(legend.position = "bottom")
+```
+</div>
+
+----
+
+<div class="columns-2">
+```{r, warning=FALSE, message=FALSE, fig.width=5}
+ppc_stat_grouped(golf$p,
+  logist_binom_predict[1:500,],
+  group = golf$dist, stat = "median") +
+  theme(legend.position = "bottom")
+ppc_stat_grouped(golf$p,
+  golf_predictive[1:500,],
+  group = golf$dist, stat = "median") +
+  theme(legend.position = "bottom")
+```
+</div>
+
+----
+
+```{r}
+mcmc_areas(as.matrix(golf_fit)[,c(11,12,13), drop=FALSE])
+```
+
+----
+
+<div class="columns-2">
+```{r}
+ppc_dens_overlay(golf$p,
+                 logist_binom_predict[1:500,])
+ppc_dens_overlay(golf$p,
+                 golf_predictive[1:500,])
+```
+</div>
+
+
+## Shinystan
+
+```{r, eval=FALSE}
+library(shinystan)
+launch_shinystan(golf_fit)
+```
+
+```{r, echo=FALSE, out.width = "700px"}
+knitr::include_graphics("shinystan.png")
+```
+
+
+## Alternative 'Sampling' Statements
+
+```{r, eval=FALSE}
+beta ~ normal(0, 1);
+target += normal_lpdf(beta | 0, 1);
+target += -0.5 * beta^2;
+target += -0.5 * beta’ * beta;
+target += -0.5 * dot_self(beta);
+```
+
+## Stan Code Linear Regression {.smaller}
+```{r, eval=FALSE}
+data {
+  int           N ; # integer, number of observations
+  int           K ; # integer, number of columns in model matrix
+  matrix[N,K]   X ; # N by K model matrix
+  vector[N]     y ; # vector of N observations
 }
 
-plot_dens(sigma) + xlab("Sigma")
-plot_dens(sigma_deg) + xlab("Sigma Degrees")
+parameters {
+  real<lower=0> sigma ; # real number > 0, standard deviation
+  vector[K]     beta ;  # K-vector of regression coefficients
+}
+
+model {
+  beta ~ normal(0, 5) ;       # prior for betas
+  sigma ~ cauchy(0, 2.5) ;    # prior for sigma
+  y ~ normal(X*beta, sigma) ; # vectorized likelihood
+}
+
+generated quantities {
+  vector[N] y_rep ; # vector of same length as the data y
+  for (n in 1:N) 
+    y_rep[n] <- normal_rng(X[n]*beta, sigma) ;
+}
 ```
 
-## Plotting Sigma from Multiple Draws
-```{r}
-fits <- sapply(sigma, FUN = function(x, y) 2 * pnorm(theta0(y), sd = x) - 1, y = dist)
-dim(fits)
-head(fits)[, 1:6]
-fits <- data.frame(fits, dist = dist)
-fits <- gather(fits, key = fit, value = measurement, -dist)
-dim(fits)
-head(fits)
-p + geom_line(data = fits, 
-              aes(x = dist / 12, y = measurement, group = fit), 
-              alpha = 1/150) + theme_bw()
 
-```
+## Refrences
 
-                
+- [A Probability Model for Golf Putting](http://www.stat.columbia.edu/~gelman/research/published/golf.pdf)
+
+- [Solving statistics problems using Stan](https://mycourses.aalto.fi/pluginfile.php/374930/mod_resource/content/1/Gelman_Stan_talk.pdf)
+
+- [Stan: A Probabilistic Programming Language](http://dx.doi.org/10.18637/jss.v076.i01)
+
+- [Stan manual](https://github.com/stan-dev/stan/releases/download/v2.17.0/stan-reference-2.17.0.pdf)
+
+- [Visualization in Bayesian workflow](https://arxiv.org/abs/1709.01449)
+
+- [Automatic Differentiation Variational Inference](https://arxiv.org/abs/1603.00788)
+
+- [MCMC using Hamiltonian dynamics](https://arxiv.org/pdf/1206.1901)
+
+- [A Conceptual Introduction to Hamiltonian Monte Carlo](https://arxiv.org/abs/1701.02434)
+
+- [The No-U-Turn Sampler: Adaptively Setting Path Lengths in Hamiltonian Monte Carlo](https://arxiv.org/abs/1111.4246)
