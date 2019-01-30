@@ -5,3 +5,5 @@ This repository contains a presentation on an introduction to Stan the probabali
 You can view the rendered slides [here](https://daniel-wells.github.io/golf/golf.html)
 
 This is a modification of work originally by [Eric Novik and Daniel Lee](https://github.com/ericnovik/golf).
+
+![](golf_files/figure-html/unnamed-chunk-30-1.png)
